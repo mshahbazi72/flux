@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, Any
 from dataclasses import dataclass
 
+import numpy as np
 from einops import rearrange
 
 import torch
@@ -224,6 +225,51 @@ class AlignmentAnalyzer:
                 total_similarity += param_sim.item()
 
         return total_similarity
+
+    def compute_correlation_matrix(
+        self, images: torch.Tensor, timesteps: np.ndarray, text_prompt: list[str] | None = None
+    ) -> np.ndarray:
+        """
+        Compute full correlation matrix between all pairs of timesteps.
+
+        This method computes pairwise alignment scores for all combinations of timesteps
+        and returns a symmetric correlation matrix. The matrix is computed efficiently
+        by only calculating the upper triangle and mirroring to the lower triangle.
+
+        Args:
+            images: Batch of clean images [B, 3, H, W] in [-1, 1] range
+            timesteps: Array of timestep values in [0, 1] range
+            text_prompt: Optional text prompts (uses dummy if None)
+
+        Returns:
+            Symmetric correlation matrix [N, N] where N is len(timesteps)
+        """
+        num_timesteps = len(timesteps)
+        correlation_matrix = np.zeros((num_timesteps, num_timesteps))
+        
+        print(f"Computing {num_timesteps}x{num_timesteps} correlation matrix...")
+        print(f"Timesteps: {timesteps}")
+        
+        # Compute pairwise scores
+        total_pairs = num_timesteps * (num_timesteps + 1) // 2  # Including diagonal
+        computed_pairs = 0
+        
+        for i in range(num_timesteps):
+            for j in range(i, num_timesteps):  # Only compute upper triangle
+                if i == j:
+                    # Perfect self-correlation
+                    correlation_matrix[i, j] = 1.0
+                else:
+                    # Compute alignment score between timesteps
+                    score = self.compute_pairwise_score(images, timesteps[i], timesteps[j], text_prompt)
+                    correlation_matrix[i, j] = score
+                    correlation_matrix[j, i] = score  # Mirror to lower triangle
+                
+                computed_pairs += 1
+                if computed_pairs % 5 == 0 or computed_pairs == total_pairs:
+                    print(f"Progress: {computed_pairs}/{total_pairs} pairs computed ({100.0*computed_pairs/total_pairs:.1f}%)")
+        
+        return correlation_matrix
 
 
 def get_transforms(target_size: int = 1024):
