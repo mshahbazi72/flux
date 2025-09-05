@@ -62,30 +62,83 @@ def load_imagenet_dataset(imagenet_path: str, batch_size: int = 4, num_workers: 
     """Load ImageNet validation dataset with PyTorch DataLoader."""
     print(f"Loading ImageNet dataset from: {imagenet_path}")
     
-    # Use ImageFolder for ImageNet validation set
-    # Assumes structure: imagenet_path/val/class_folders/images
-    val_path = Path(imagenet_path) / "val"
-    if not val_path.exists():
-        # Try direct path if val subfolder doesn't exist
-        val_path = Path(imagenet_path)
-        if not val_path.exists():
-            raise ValueError(f"ImageNet path not found: {imagenet_path}")
+    # Expand user path (handle ~)
+    imagenet_path = str(Path(imagenet_path).expanduser())
+    print(f"Expanded path: {imagenet_path}")
     
-    transform = get_transforms()
-    dataset = ImageFolder(root=str(val_path), transform=transform)
+    # Try multiple possible directory structures
+    possible_paths = [
+        Path(imagenet_path) / "val",  # Standard ImageNet structure
+        Path(imagenet_path) / "validation",  # Alternative validation folder
+        Path(imagenet_path),  # Direct class folders
+        Path(imagenet_path) / "imagenet_extracted" / "val",  # Our extracted structure
+    ]
     
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True if torch.cuda.is_available() else False
-    )
+    val_path = None
+    for path in possible_paths:
+        if path.exists():
+            # Check if this path contains class folders with images
+            class_folders = [d for d in path.iterdir() if d.is_dir()]
+            if class_folders:
+                # Check if at least one class folder contains image files
+                for class_folder in class_folders[:5]:  # Check first 5 folders
+                    image_files = list(class_folder.glob("*.jpg")) + list(class_folder.glob("*.jpeg")) + list(class_folder.glob("*.png"))
+                    if image_files:
+                        val_path = path
+                        break
+                if val_path:
+                    break
     
-    print(f"Loaded ImageNet dataset: {len(dataset)} images, {len(dataset.classes)} classes")
-    print(f"DataLoader: batch_size={batch_size}, num_workers={num_workers}")
+    if val_path is None:
+        # Provide helpful error message with suggestions
+        error_msg = f"""
+ImageNet dataset not found at: {imagenet_path}
+
+Tried the following paths:
+{chr(10).join(f"  - {p}" for p in possible_paths)}
+
+Expected directory structure:
+  imagenet_path/
+    val/           (or validation/)
+      n01234567/   (class folders)
+        image1.jpg
+        image2.jpg
+        ...
+      n07654321/
+        ...
+
+Suggestions:
+1. If you have imagenet-val.tar.gz, extract it first
+2. Ensure images are organized into class folders
+3. Check the path is correct: {imagenet_path}
+"""
+        raise ValueError(error_msg)
     
-    return dataloader
+    print(f"Found ImageNet data at: {val_path}")
+    
+    try:
+        transform = get_transforms()
+        dataset = ImageFolder(root=str(val_path), transform=transform)
+        
+        if len(dataset) == 0:
+            raise ValueError(f"No images found in {val_path}. Check that class folders contain image files.")
+        
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True if torch.cuda.is_available() else False
+        )
+        
+        print(f"✅ Loaded ImageNet dataset: {len(dataset)} images, {len(dataset.classes)} classes")
+        print(f"   DataLoader: batch_size={batch_size}, num_workers={num_workers}")
+        print(f"   Sample classes: {dataset.classes[:5]}...")
+        
+        return dataloader
+        
+    except Exception as e:
+        raise ValueError(f"Failed to create ImageFolder dataset from {val_path}: {e}")
 
 
 def load_flux_models(device: str = "cuda"):
@@ -235,8 +288,18 @@ def main(timestep=0, imagenet_path="~/imagenet", batch_size=1, num_workers=4, se
         print()
         print("✅ Test completed successfully!")
         
+    except FileNotFoundError as e:
+        print(f"❌ Dataset Error: {e}")
+        print("\n💡 Quick fix suggestions:")
+        print("1. Extract ImageNet data: cd ~/BFL && tar -xzf imagenet-val.tar.gz")
+        print("2. Organize the data into class folders")
+        print("3. Use the correct path, e.g., --imagenet-path ~/BFL/imagenet_extracted")
+        return 1
+    except ValueError as e:
+        print(f"❌ Configuration Error: {e}")
+        return 1
     except Exception as e:
-        print(f"❌ Error during execution: {e}")
+        print(f"❌ Unexpected error during execution: {e}")
         import traceback
         traceback.print_exc()
         return 1
