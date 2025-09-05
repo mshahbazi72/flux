@@ -7,11 +7,11 @@ a single denoising step on FLUX-dev model. This serves as the foundation
 for the alignment analysis technique described in the implementation plan.
 """
 
-import argparse
 import random
 import time
 from pathlib import Path
 from typing import Dict, Any
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -19,11 +19,34 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 from PIL import Image
+import tyro
 
 # Import FLUX components
 from src.flux.util import load_flow_model, load_ae, load_t5, load_clip
 from src.flux.sampling import prepare
 from src.flux.modules.layers import timestep_embedding
+
+
+@dataclass
+class Config:
+    """Configuration for FLUX Alignment Analysis."""
+    imagenet_path: str
+    """Path to ImageNet dataset (should contain val/ subfolder or class folders)"""
+    
+    batch_size: int = 4
+    """Batch size for processing (default: 4)"""
+    
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    """Device for computation (cuda/cpu)"""
+    
+    timestep: float | None = None
+    """Fixed timestep for denoising (default: random)"""
+    
+    seed: int = 42
+    """Random seed for reproducibility"""
+    
+    num_workers: int = 4
+    """Number of DataLoader workers"""
 
 
 def get_transforms(target_size: int = 1024):
@@ -158,45 +181,31 @@ def run_single_denoising_step(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="FLUX Alignment Analysis - Dataset Loading Test")
-    parser.add_argument("--imagenet_path", type=str, required=True,
-                       help="Path to ImageNet dataset (should contain val/ subfolder or class folders)")
-    parser.add_argument("--batch_size", type=int, default=4,
-                       help="Batch size for processing (default: 4)")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
-                       help="Device for computation (cuda/cpu)")
-    parser.add_argument("--timestep", type=float, default=None,
-                       help="Fixed timestep for denoising (default: random)")
-    parser.add_argument("--seed", type=int, default=42,
-                       help="Random seed for reproducibility")
-    parser.add_argument("--num_workers", type=int, default=4,
-                       help="Number of DataLoader workers")
-    
-    args = parser.parse_args()
+    config = tyro.cli(Config, description="FLUX Alignment Analysis - Dataset Loading Test")
     
     # Set random seeds
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
+    torch.manual_seed(config.seed)
+    random.seed(config.seed)
     
     print("=" * 60)
     print("FLUX Alignment Analysis - Dataset Loading and Denoising Test")
     print("=" * 60)
-    print(f"Arguments: {vars(args)}")
+    print(f"Configuration: {config}")
     print()
     
     try:
         # Load ImageNet dataset
         print("Step 1: Loading ImageNet dataset...")
         dataloader = load_imagenet_dataset(
-            args.imagenet_path, 
-            batch_size=args.batch_size,
-            num_workers=args.num_workers
+            config.imagenet_path, 
+            batch_size=config.batch_size,
+            num_workers=config.num_workers
         )
         print()
         
         # Load FLUX models
         print("Step 2: Loading FLUX models...")
-        model, ae, t5, clip = load_flux_models(device=args.device)
+        model, ae, t5, clip = load_flux_models(device=config.device)
         print()
         
         # Get one random batch
@@ -211,10 +220,10 @@ def main():
         results = run_single_denoising_step(
             model, ae, t5, clip,
             batch_images,
-            device=args.device,
-            timestep=args.timestep
+            device=config.device,
+            timestep=config.timestep
         )
-        print()
+
         
         # Print results summary
         print("Results Summary:")
