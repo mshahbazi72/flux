@@ -39,9 +39,6 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     """Device for computation (cuda/cpu)"""
     
-    timestep: float | None = None
-    """Fixed timestep for denoising (default: random)"""
-    
     seed: int = 42
     """Random seed for reproducibility"""
     
@@ -372,23 +369,22 @@ def main(config: Config):
     
     # Compute gradients for a single timestep
     print("Step 5: Computing gradients for single timestep...")
-    test_timestep = config.timestep if config.timestep is not None else 0.5
-    print(f"Using timestep: {test_timestep}")
+    test_timestep_1 = 0.0
+    test_timestep_2 = 1
 
-    gradient_vector_1 = analyzer.compute_single_timestep_gradients(
+
+    gradients_1 = analyzer.compute_single_timestep_gradients(
         batch_images, 
-        test_timestep
+        test_timestep_1
     )
 
-    gradient_vector_2 = analyzer.compute_single_timestep_gradients(
+    gradients_2 = analyzer.compute_single_timestep_gradients(
         batch_images, 
-        test_timestep
+        test_timestep_2
     )
     
     print()
-    print("✅ Gradient computation completed successfully!")
-    print("Next steps: Implement alignment matrix calculation and timestep clustering.")
-        
+    print("✅ Gradient computation completed successfully!")        
 
 
 if __name__ == "__main__":
