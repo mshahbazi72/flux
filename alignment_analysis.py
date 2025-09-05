@@ -375,7 +375,12 @@ def main(config: Config):
     test_timestep = config.timestep if config.timestep is not None else 0.5
     print(f"Using timestep: {test_timestep}")
 
-    gradient_vector = analyzer.compute_single_timestep_gradients(
+    gradient_vector_1 = analyzer.compute_single_timestep_gradients(
+        batch_images, 
+        test_timestep
+    )
+
+    gradient_vector_2 = analyzer.compute_single_timestep_gradients(
         batch_images, 
         test_timestep
     )
