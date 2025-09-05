@@ -177,6 +177,9 @@ class AlignmentAnalyzer:
         # Convert velocity target to patch tokens to match model output format
         velocity_target = rearrange(velocity_target, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
         
+        # Cast velocity_target to match predicted_velocity dtype (bfloat16)
+        velocity_target = velocity_target.to(predicted_velocity.dtype)
+        
         loss = F.mse_loss(predicted_velocity, velocity_target)
         
         # Compute gradients
