@@ -186,15 +186,12 @@ class AlignmentAnalyzer:
         loss.backward()
         
         # Collect and flatten gradients from all model parameters
-        gradients = []
-        for param in self.model.parameters():
+        gradients = {}
+        for name, param in self.model.named_parameters():
             if param.grad is not None:
-                gradients.append(param.grad.flatten())
+                gradients[name] = param.grad.flatten()
         
-        # Concatenate all gradients into single vector
-        gradient_vector = torch.cat(gradients)
-        
-        return gradient_vector
+        return gradients
 
 
 def get_transforms(target_size: int = 1024):
@@ -377,7 +374,7 @@ def main(config: Config):
     print("Step 5: Computing gradients for single timestep...")
     test_timestep = config.timestep if config.timestep is not None else 0.5
     print(f"Using timestep: {test_timestep}")
-    
+
     gradient_vector = analyzer.compute_single_timestep_gradients(
         batch_images, 
         test_timestep
