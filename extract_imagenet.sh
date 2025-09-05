@@ -5,9 +5,9 @@
 set -e  # Exit on any error
 
 # Configuration
-SOURCE_TAR="~/BFL/imagenet-val.tar.gz"
-OUTPUT_DIR="~/BFL/imagenet_extracted"
-TEMP_DIR="~/BFL/temp_imagenet"
+SOURCE_TAR="~/imagenet-val.tar.gz"
+OUTPUT_DIR="~/imagenet_extracted"
+TEMP_DIR="~/temp_imagenet"
 
 # Colors for output
 RED='\033[0;31m'
