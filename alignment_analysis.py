@@ -78,6 +78,14 @@ class AlignmentAnalyzer:
         self.ae.eval()
         self.t5.eval()
         self.clip.eval()
+        
+        # Freeze encoder parameters completely to prevent gradient accumulation
+        for param in self.ae.parameters():
+            param.requires_grad = False
+        for param in self.t5.parameters():
+            param.requires_grad = False  
+        for param in self.clip.parameters():
+            param.requires_grad = False
     
     def add_noise_at_timestep(self, clean_images: torch.Tensor, timestep: float) -> tuple[torch.Tensor, torch.Tensor]:
         """
