@@ -233,11 +233,11 @@ def run_single_denoising_step(
     }
 
 
-def main(timestep=0, imagenet_path="~/imagenet", batch_size=1, num_workers=4, seed=123, device="cuda",):
+def main(config: Config):
     
     # Set random seeds
-    torch.manual_seed(seed)
-    random.seed(seed)
+    torch.manual_seed(config.seed)
+    random.seed(config.seed)
     
     print("=" * 60)
     print("FLUX Alignment Analysis - Dataset Loading and Denoising Test")
@@ -248,15 +248,15 @@ def main(timestep=0, imagenet_path="~/imagenet", batch_size=1, num_workers=4, se
         # Load ImageNet dataset
         print("Step 1: Loading ImageNet dataset...")
         dataloader = load_imagenet_dataset(
-            imagenet_path, 
-            batch_size=batch_size,
-            num_workers=num_workers
+            config.imagenet_path, 
+            batch_size=config.batch_size,
+            num_workers=config.num_workers
         )
         print()
         
         # Load FLUX models
         print("Step 2: Loading FLUX models...")
-        model, ae, t5, clip = load_flux_models(device="cuda")
+        model, ae, t5, clip = load_flux_models(device=config.device)
         print()
         
         # Get one random batch
@@ -271,8 +271,8 @@ def main(timestep=0, imagenet_path="~/imagenet", batch_size=1, num_workers=4, se
         results = run_single_denoising_step(
             model, ae, t5, clip,
             batch_images,
-            device=device,
-            timestep=timestep
+            device=config.device,
+            timestep=config.timestep
         )
 
         
@@ -308,4 +308,5 @@ def main(timestep=0, imagenet_path="~/imagenet", batch_size=1, num_workers=4, se
 
 
 if __name__ == "__main__":
-    tyro.cli(main)
+    config = tyro.cli(Config)
+    main(config)
