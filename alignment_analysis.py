@@ -246,14 +246,14 @@ class AlignmentAnalyzer:
         """
         num_timesteps = len(timesteps)
         correlation_matrix = np.zeros((num_timesteps, num_timesteps))
-        
+
         print(f"Computing {num_timesteps}x{num_timesteps} correlation matrix...")
         print(f"Timesteps: {timesteps}")
-        
+
         # Compute pairwise scores
         total_pairs = num_timesteps * (num_timesteps + 1) // 2  # Including diagonal
         computed_pairs = 0
-        
+
         for i in range(num_timesteps):
             for j in range(i, num_timesteps):  # Only compute upper triangle
                 if i == j:
@@ -264,11 +264,13 @@ class AlignmentAnalyzer:
                     score = self.compute_pairwise_score(images, timesteps[i], timesteps[j], text_prompt)
                     correlation_matrix[i, j] = score
                     correlation_matrix[j, i] = score  # Mirror to lower triangle
-                
+
                 computed_pairs += 1
                 if computed_pairs % 5 == 0 or computed_pairs == total_pairs:
-                    print(f"Progress: {computed_pairs}/{total_pairs} pairs computed ({100.0*computed_pairs/total_pairs:.1f}%)")
-        
+                    print(
+                        f"Progress: {computed_pairs}/{total_pairs} pairs computed ({100.0*computed_pairs/total_pairs:.1f}%)"
+                    )
+
         return correlation_matrix
 
 
@@ -444,16 +446,49 @@ def main(config: Config):
     analyzer = AlignmentAnalyzer(model, ae, t5, clip, device=config.device)
     print()
 
-    # Compute pairwise alignment score between timesteps
-    print("Step 5: Computing pairwise alignment score...")
-    test_timestep_1 = 0.0
-    test_timestep_2 = 1.0
-
-    alignment_score = analyzer.compute_pairwise_score(batch_images, test_timestep_1, test_timestep_2)
-
-    print(f"Alignment score between timestep {test_timestep_1} and {test_timestep_2}: {alignment_score:.4f}")
+    # Generate timesteps for correlation matrix
+    print("Step 5: Generating timesteps for correlation analysis...")
+    num_timesteps = 10
+    timesteps = np.linspace(0.0, 1.0, num_timesteps)
+    print(f"Generated {num_timesteps} timesteps: {timesteps}")
     print()
-    print("✅ Alignment analysis completed successfully!")
+
+    # Compute full correlation matrix
+    print("Step 6: Computing correlation matrix...")
+    correlation_matrix = analyzer.compute_correlation_matrix(batch_images, timesteps)
+    print()
+
+    # Display correlation matrix
+    print("Step 7: Displaying results...")
+    print("=" * 60)
+    print("FLUX TIMESTEP ALIGNMENT CORRELATION MATRIX")
+    print("=" * 60)
+    print(f"Matrix shape: {correlation_matrix.shape}")
+    print(f"Timesteps: {timesteps}")
+    print()
+    print("Correlation Matrix:")
+    print("-" * 60)
+
+    # Format matrix with timestep labels
+    print("     ", end="")
+    for t in timesteps:
+        print(f"{t:>8.3f}", end="")
+    print()
+
+    for i, t_row in enumerate(timesteps):
+        print(f"{t_row:5.3f}", end="")
+        for j in range(len(timesteps)):
+            print(f"{correlation_matrix[i,j]:8.4f}", end="")
+        print()
+
+    print("-" * 60)
+    print(f"Min correlation: {np.min(correlation_matrix[correlation_matrix < 1.0]):.4f}")
+    print(f"Max correlation: {np.max(correlation_matrix[correlation_matrix < 1.0]):.4f}")
+    print(f"Mean correlation: {np.mean(correlation_matrix[correlation_matrix < 1.0]):.4f}")
+    print()
+    print("✅ Correlation matrix analysis completed successfully!")
+
+    return correlation_matrix
 
 
 if __name__ == "__main__":
