@@ -91,27 +91,7 @@ def load_imagenet_dataset(imagenet_path: str, batch_size: int = 4, num_workers: 
     
     if val_path is None:
         # Provide helpful error message with suggestions
-        error_msg = f"""
-ImageNet dataset not found at: {imagenet_path}
-
-Tried the following paths:
-{chr(10).join(f"  - {p}" for p in possible_paths)}
-
-Expected directory structure:
-  imagenet_path/
-    val/           (or validation/)
-      n01234567/   (class folders)
-        image1.jpg
-        image2.jpg
-        ...
-      n07654321/
-        ...
-
-Suggestions:
-1. If you have imagenet-val.tar.gz, extract it first
-2. Ensure images are organized into class folders
-3. Check the path is correct: {imagenet_path}
-"""
+        error_msg = f"ImageNet dataset not found at: {imagenet_path}"
         raise ValueError(error_msg)
     
     print(f"Found ImageNet data at: {val_path}")
@@ -198,16 +178,16 @@ def run_single_denoising_step(
     inp = prepare(t5, clip, encoded_images, prompt=dummy_prompt)
     
     # Generate timestep tensor
-    timestep_tensor = torch.full((batch_size,), timestep, dtype=torch.float32, device=torch_device)
+    timestep_tensor = torch.full((batch_size,), timestep, dtype=torch.bfloat16, device=torch_device)
     
     # Prepare guidance (for flux-dev)
-    guidance_tensor = torch.full((batch_size,), 3.5, device=torch_device, dtype=torch.float32)
+    guidance_tensor = torch.full((batch_size,), 3.5, device=torch_device, dtype=torch.bfloat16)
     
     # Run forward pass through model
     print("Running forward pass through FLUX transformer...")
     start_time = time.time()
     
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast(device_type=torch_device.type, dtype=torch.bfloat16):
         pred = model(
             img=inp["img"],
             img_ids=inp["img_ids"],
