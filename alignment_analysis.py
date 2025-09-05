@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Dict, Any
 from dataclasses import dataclass
 
+from einops import rearrange
+
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
@@ -171,6 +173,10 @@ class AlignmentAnalyzer:
         # Compute flow matching loss (MSE between predicted velocity and velocity target)
         # In flow matching: x_t = (1-t)*clean + t*noise, so velocity = dx/dt = noise - clean
         velocity_target = noise - encoded_images
+        
+        # Convert velocity target to patch tokens to match model output format
+        velocity_target = rearrange(velocity_target, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
+        
         loss = F.mse_loss(predicted_velocity, velocity_target)
         
         # Compute gradients
