@@ -187,7 +187,7 @@ class AlignmentAnalyzer:
         for name, param in self.model.named_parameters():
             if param.grad is not None:
                 gradients[name] = param.grad.flatten()
-        
+        self.model.zero_grad()
         return gradients
 
 
@@ -380,7 +380,7 @@ def main(config: Config):
 
     gradients_1_cpu = gradients_1
     del gradients_1
-    
+
     gradients_2 = analyzer.compute_single_timestep_gradients(
         batch_images, 
         test_timestep_2
