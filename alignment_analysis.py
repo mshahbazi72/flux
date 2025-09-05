@@ -186,15 +186,15 @@ class AlignmentAnalyzer:
         loss.backward()
         
         # Collect and flatten gradients from all model parameters
-        gradients = []
-        for param in self.model.parameters():
-            if param.grad is not None:
-                gradients.append(param.grad.flatten())
+        # gradients = []
+        # for param in self.model.parameters():
+        #     if param.grad is not None:
+        #         gradients.append(param.grad.flatten())
         
-        # Concatenate all gradients into single vector
-        gradient_vector = torch.cat(gradients)
+        # # Concatenate all gradients into single vector
+        # gradient_vector = torch.cat(gradients)
         
-        return gradient_vector
+        # return gradient_vector
 
 
 def get_transforms(target_size: int = 1024):
@@ -383,36 +383,11 @@ def main(config: Config):
         batch_images, 
         test_timestep
     )
-    gradient_time = time.time() - start_time
-    
-    # Compile results
-    results = {
-        "timestep": test_timestep,
-        "batch_size": batch_images.shape[0],
-        "gradient_computation_time": gradient_time,
-        "gradient_vector_size": gradient_vector.shape[0],
-        "gradient_norm": gradient_vector.norm().item(),
-        "gradient_mean": gradient_vector.mean().item(),
-        "gradient_std": gradient_vector.std().item(),
-        "num_nonzero_gradients": (gradient_vector != 0).sum().item()
-    }
-
-    
-    # Print results summary
-    print("Gradient Computation Results:")
-    print("-" * 40)
-    for key, value in results.items():
-        if isinstance(value, float):
-            print(f"{key}: {value:.4f}")
-        else:
-            print(f"{key}: {value}")
     
     print()
     print("✅ Gradient computation completed successfully!")
     print("Next steps: Implement alignment matrix calculation and timestep clustering.")
         
-    
-    return 0
 
 
 if __name__ == "__main__":
