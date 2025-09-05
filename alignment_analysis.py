@@ -114,7 +114,7 @@ def run_single_denoising_step(
     model, ae, t5, clip,
     images: torch.Tensor,
     device: str,
-    timestep: float = None
+    timestep: float | None = None
 ) -> Dict[str, Any]:
     """Run a single denoising step on a batch of images."""
     batch_size = images.shape[0]
@@ -180,32 +180,30 @@ def run_single_denoising_step(
     }
 
 
-def main():
-    config = tyro.cli(Config, description="FLUX Alignment Analysis - Dataset Loading Test")
+def main(timestep=0, imagenet_path="~/imagenet", batch_size=1, num_workers=4, seed=123, device="cuda",):
     
     # Set random seeds
-    torch.manual_seed(config.seed)
-    random.seed(config.seed)
+    torch.manual_seed(seed)
+    random.seed(seed)
     
     print("=" * 60)
     print("FLUX Alignment Analysis - Dataset Loading and Denoising Test")
     print("=" * 60)
-    print(f"Configuration: {config}")
     print()
     
     try:
         # Load ImageNet dataset
         print("Step 1: Loading ImageNet dataset...")
         dataloader = load_imagenet_dataset(
-            config.imagenet_path, 
-            batch_size=config.batch_size,
-            num_workers=config.num_workers
+            imagenet_path, 
+            batch_size=batch_size,
+            num_workers=num_workers
         )
         print()
         
         # Load FLUX models
         print("Step 2: Loading FLUX models...")
-        model, ae, t5, clip = load_flux_models(device=config.device)
+        model, ae, t5, clip = load_flux_models(device="cuda")
         print()
         
         # Get one random batch
@@ -220,8 +218,8 @@ def main():
         results = run_single_denoising_step(
             model, ae, t5, clip,
             batch_images,
-            device=config.device,
-            timestep=config.timestep
+            device=device,
+            timestep=timestep
         )
 
         
@@ -247,4 +245,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    tyro.cli(main)
