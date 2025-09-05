@@ -18,13 +18,11 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
-from PIL import Image
 import tyro
 
 # Import FLUX components
 from src.flux.util import load_flow_model, load_ae, load_t5, load_clip
 from src.flux.sampling import prepare
-from src.flux.modules.layers import timestep_embedding
 
 
 @dataclass
@@ -49,6 +47,139 @@ class Config:
     """Number of DataLoader workers"""
 
 
+class AlignmentAnalyzer:
+    """
+    Analyzer for computing gradient-based alignment between timesteps in FLUX model.
+    
+    This class implements the gradient computation and alignment analysis technique
+    described in the DiffPruning paper for mixture of experts creation.
+    """
+    
+    def __init__(self, model, ae, t5, clip, device: str = "cuda"):
+        """
+        Initialize the AlignmentAnalyzer with FLUX model components.
+        
+        Args:
+            model: FLUX transformer model
+            ae: Autoencoder for image encoding/decoding
+            t5: T5 text encoder
+            clip: CLIP text encoder
+            device: Device for computation (cuda/cpu)
+        """
+        self.model = model
+        self.ae = ae
+        self.t5 = t5
+        self.clip = clip
+        self.device = torch.device(device)
+        
+        # Set models to train mode for gradient computation
+        self.model.train()
+        # Keep encoders in eval mode as we don't need their gradients
+        self.ae.eval()
+        self.t5.eval()
+        self.clip.eval()
+    
+    def add_noise_at_timestep(self, clean_images: torch.Tensor, timestep: float) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Create noisy images at a specific timestep using FLUX flow matching interpolation.
+        
+        FLUX uses linear interpolation: x_t = (1-t) * clean + t * noise
+        where t=0 is clean image and t=1 is pure noise.
+        
+        Args:
+            clean_images: Clean encoded images [B, C, H, W]
+            timestep: Timestep value in [0, 1] range (0=clean, 1=noise)
+            
+        Returns:
+            Tuple of (noisy_images, noise) where noise is the sampled noise
+        """
+        # Generate random noise with same shape as images
+        noise = torch.randn_like(clean_images, device=self.device)
+        
+        # FLUX flow matching uses linear interpolation path
+        # At timestep=0, image is clean; at timestep=1, image is pure noise
+        # x_t = (1-t) * clean + t * noise
+        alpha = 1.0 - timestep  # weight for clean image
+        noisy_images = alpha * clean_images + timestep * noise
+        
+        return noisy_images, noise
+    
+    def compute_single_timestep_gradients(
+        self, 
+        images: torch.Tensor, 
+        timestep: float,
+        text_prompt: list[str] | None = None
+    ) -> torch.Tensor:
+        """
+        Compute gradients of flow matching loss at a single timestep.
+        
+        FLUX uses flow matching where the model predicts velocity field v(x_t, t)
+        that transforms from noise (t=1) to clean image (t=0).
+        
+        Args:
+            images: Batch of clean images [B, 3, H, W] in [-1, 1] range
+            timestep: Timestep value in [0, 1] range (1=noise, 0=clean)
+            text_prompt: Optional text prompts (uses dummy if None)
+            
+        Returns:
+            Flattened gradient vector for the timestep
+        """
+        batch_size = images.shape[0]
+        
+        # Use dummy prompts if not provided
+        if text_prompt is None:
+            text_prompt = ["a high quality photograph"] * batch_size
+        
+        # Clear any existing gradients
+        self.model.zero_grad()
+        
+        # Encode images with autoencoder (no gradients needed)
+        with torch.no_grad():
+            encoded_images = self.ae.encode(images.to(self.device))
+        
+        # Add noise at the specified timestep
+        noisy_images, noise = self.add_noise_at_timestep(encoded_images, timestep)
+        
+        # Prepare model inputs
+        with torch.no_grad():
+            inp = prepare(self.t5, self.clip, noisy_images, prompt=text_prompt)
+        
+        # Create timestep and guidance tensors
+        timestep_tensor = torch.full((batch_size,), timestep, dtype=torch.bfloat16, device=self.device)
+        guidance_tensor = torch.full((batch_size,), 3.5, device=self.device, dtype=torch.bfloat16)
+        
+        # Forward pass with gradient computation enabled
+        with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
+            predicted_velocity = self.model(
+                img=inp["img"],
+                img_ids=inp["img_ids"],
+                txt=inp["txt"],
+                txt_ids=inp["txt_ids"],
+                y=inp["vec"],
+                timesteps=timestep_tensor,
+                guidance=guidance_tensor,
+            )
+        
+        # Compute flow matching loss (MSE between predicted velocity and velocity target)
+        # In flow matching: x_t = (1-t)*clean + t*noise, so velocity = dx/dt = noise - clean
+        velocity_target = noise - encoded_images
+        loss = F.mse_loss(predicted_velocity, velocity_target)
+        
+        # Compute gradients
+        loss.backward()
+        
+        # Collect and flatten gradients from all model parameters
+        gradients = []
+        for param in self.model.parameters():
+            if param.grad is not None:
+                gradients.append(param.grad.flatten())
+        
+        # Concatenate all gradients into single vector
+        gradient_vector = torch.cat(gradients)
+        
+        return gradient_vector
+
+
 def get_transforms(target_size: int = 1024):
     """Create transforms for ImageNet data compatible with FLUX."""
     return transforms.Compose([
@@ -62,58 +193,38 @@ def load_imagenet_dataset(imagenet_path: str, batch_size: int = 4, num_workers: 
     """Load ImageNet validation dataset with PyTorch DataLoader."""
     print(f"Loading ImageNet dataset from: {imagenet_path}")
     
-    # Expand user path (handle ~)
-    imagenet_path = str(Path(imagenet_path).expanduser())
-    print(f"Expanded path: {imagenet_path}")
+    # Expand user path and get validation directory
+    val_path = Path(imagenet_path).expanduser() / "val"
+    print(f"Looking for validation data at: {val_path}")
     
-    # Try multiple possible directory structures
-    possible_paths = [
-        Path(imagenet_path) / "val",  # Standard ImageNet structure
-        Path(imagenet_path) / "validation",  # Alternative validation folder
-        Path(imagenet_path),  # Direct class folders
-        Path(imagenet_path) / "imagenet_extracted" / "val",  # Our extracted structure
-    ]
+    # Validate dataset structure
+    if not val_path.exists():
+        raise ValueError(f"ImageNet validation directory not found: {val_path}")
     
-    val_path = None
-    for path in possible_paths:
-        if path.exists():
-            # Check if this path contains class folders with images
-            class_folders = [d for d in path.iterdir() if d.is_dir()]
-            if class_folders:
-                # Check if at least one class folder contains image files
-                for class_folder in class_folders[:5]:  # Check first 5 folders
-                    image_files = list(class_folder.glob("*.jpg")) + list(class_folder.glob("*.jpeg")) + list(class_folder.glob("*.png"))
-                    if image_files:
-                        val_path = path
-                        break
-                if val_path:
-                    break
+    # Check for class directories (ImageNet classes start with 'n')
+    class_dirs = [d for d in val_path.iterdir() if d.is_dir() and d.name.startswith('n')]
+    if not class_dirs:
+        raise ValueError(f"No ImageNet class directories found in: {val_path}")
     
-    if val_path is None:
-        # Provide helpful error message with suggestions
-        error_msg = f"ImageNet dataset not found at: {imagenet_path}"
-        raise ValueError(error_msg)
-    
-    print(f"Found ImageNet data at: {val_path}")
+    print(f"Found {len(class_dirs)} class directories")
     
     try:
         transform = get_transforms()
         dataset = ImageFolder(root=str(val_path), transform=transform)
         
         if len(dataset) == 0:
-            raise ValueError(f"No images found in {val_path}. Check that class folders contain image files.")
+            raise ValueError(f"No images found in {val_path}")
         
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
-            pin_memory=True if torch.cuda.is_available() else False
+            pin_memory=torch.cuda.is_available()
         )
         
         print(f"✅ Loaded ImageNet dataset: {len(dataset)} images, {len(dataset.classes)} classes")
         print(f"   DataLoader: batch_size={batch_size}, num_workers={num_workers}")
-        print(f"   Sample classes: {dataset.classes[:5]}...")
         
         return dataloader
         
@@ -219,70 +330,70 @@ def main(config: Config):
     torch.manual_seed(config.seed)
     random.seed(config.seed)
     
-    print("=" * 60)
-    print("FLUX Alignment Analysis - Dataset Loading and Denoising Test")
-    print("=" * 60)
+    # Load ImageNet dataset
+    print("Step 1: Loading ImageNet dataset...")
+    dataloader = load_imagenet_dataset(
+        config.imagenet_path, 
+        batch_size=config.batch_size,
+        num_workers=config.num_workers
+    )
     print()
     
-    try:
-        # Load ImageNet dataset
-        print("Step 1: Loading ImageNet dataset...")
-        dataloader = load_imagenet_dataset(
-            config.imagenet_path, 
-            batch_size=config.batch_size,
-            num_workers=config.num_workers
-        )
-        print()
-        
-        # Load FLUX models
-        print("Step 2: Loading FLUX models...")
-        model, ae, t5, clip = load_flux_models(device=config.device)
-        print()
-        
-        # Get one random batch
-        print("Step 3: Getting random batch...")
-        batch_images, batch_labels = next(iter(dataloader))
-        print(f"Batch shape: {batch_images.shape}")
-        print(f"Batch labels: {batch_labels[:5].tolist()}...")  # Show first 5 labels
-        print()
-        
-        # Run single denoising step
-        print("Step 4: Running single denoising step...")
-        results = run_single_denoising_step(
-            model, ae, t5, clip,
-            batch_images,
-            device=config.device,
-            timestep=config.timestep
-        )
+    # Load FLUX models
+    print("Step 2: Loading FLUX models...")
+    model, ae, t5, clip = load_flux_models(device=config.device)
+    print()
+    
+    # Get one random batch
+    print("Step 3: Getting random batch...")
+    batch_images, batch_labels = next(iter(dataloader))
+    print(f"Batch shape: {batch_images.shape}")
+    print(f"Batch labels: {batch_labels[:5].tolist()}...")  # Show first 5 labels
+    print()
+    
+    # Create AlignmentAnalyzer and compute gradients
+    print("Step 4: Creating AlignmentAnalyzer...")
+    analyzer = AlignmentAnalyzer(model, ae, t5, clip, device=config.device)
+    print()
+    
+    # Compute gradients for a single timestep
+    print("Step 5: Computing gradients for single timestep...")
+    test_timestep = config.timestep if config.timestep is not None else 0.5
+    print(f"Using timestep: {test_timestep}")
+    
+    start_time = time.time()
+    gradient_vector = analyzer.compute_single_timestep_gradients(
+        batch_images, 
+        test_timestep
+    )
+    gradient_time = time.time() - start_time
+    
+    # Compile results
+    results = {
+        "timestep": test_timestep,
+        "batch_size": batch_images.shape[0],
+        "gradient_computation_time": gradient_time,
+        "gradient_vector_size": gradient_vector.shape[0],
+        "gradient_norm": gradient_vector.norm().item(),
+        "gradient_mean": gradient_vector.mean().item(),
+        "gradient_std": gradient_vector.std().item(),
+        "num_nonzero_gradients": (gradient_vector != 0).sum().item()
+    }
 
+    
+    # Print results summary
+    print("Gradient Computation Results:")
+    print("-" * 40)
+    for key, value in results.items():
+        if isinstance(value, float):
+            print(f"{key}: {value:.4f}")
+        else:
+            print(f"{key}: {value}")
+    
+    print()
+    print("✅ Gradient computation completed successfully!")
+    print("Next steps: Implement alignment matrix calculation and timestep clustering.")
         
-        # Print results summary
-        print("Results Summary:")
-        print("-" * 30)
-        for key, value in results.items():
-            if isinstance(value, float):
-                print(f"{key}: {value:.4f}")
-            else:
-                print(f"{key}: {value}")
-        
-        print()
-        print("✅ Test completed successfully!")
-        
-    except FileNotFoundError as e:
-        print(f"❌ Dataset Error: {e}")
-        print("\n💡 Quick fix suggestions:")
-        print("1. Extract ImageNet data: cd ~/BFL && tar -xzf imagenet-val.tar.gz")
-        print("2. Organize the data into class folders")
-        print("3. Use the correct path, e.g., --imagenet-path ~/BFL/imagenet_extracted")
-        return 1
-    except ValueError as e:
-        print(f"❌ Configuration Error: {e}")
-        return 1
-    except Exception as e:
-        print(f"❌ Unexpected error during execution: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
     
     return 0
 
