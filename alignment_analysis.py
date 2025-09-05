@@ -378,7 +378,7 @@ def main(config: Config):
         test_timestep_1
     )
 
-    gradients_1_cpu = gradients_1
+    gradients_1_cpu = gradients_1.cpu()
     del gradients_1
 
     gradients_2 = analyzer.compute_single_timestep_gradients(
